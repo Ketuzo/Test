@@ -1,6 +1,6 @@
 <!-- src/components/flow/FlowComp.vue -->
 <template>
-  <div class="flow-wrap">
+  <div class="flow-wrap" @dragover.prevent @drop="onDrop">
     <VueFlow
       v-model:nodes="nodes"
       v-model:edges="edges"
@@ -10,23 +10,23 @@
       @connect="onConnect"
       @edge-click="onEdgeClick"
       @edge-contextmenu="onEdgeContextMenu"
-      @dragenter.prevent
-      @dragover.prevent="onDragOver"
-      @drop="onDrop"
     >
       <Controls />
       <MiniMap />
 
-      <!-- classic -->
+      <!-- classic: Input / Output / Filter / Global -->
       <template #node-input-custom="p">
         <InputNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
+
       <template #node-output-custom="p">
         <OutputNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
+
       <template #node-filter="p">
         <FilterNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
+
       <template #node-global="p">
         <CommandNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
@@ -34,28 +34,27 @@
         <CommandNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
 
-      <!-- template builder -->
+      <!-- template builder nodes -->
       <template #node-tpl-if="p">
         <TplIfNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
-      <template #node-tpl-range="p">
-        <TplRangeNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
-      </template>
+
       <template #node-tpl-filterchain="p">
-        <TplFilterChainNode v-bind="p" @remove="removeNode(p.id)" />
+        <TplFilterChainNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
-      <template #node-tpl-filter="p">
-        <TplFilterNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
-      </template>
+
       <template #node-tpl-params="p">
         <TplParamsNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
+
       <template #node-tpl-snippet="p">
         <TplSnippetNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
+
       <template #node-tpl-output="p">
         <TplOutputNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
+
       <template #node-tpl-var="p">
         <TplVarNode v-bind="p" @remove="removeNode(p.id)" @update:data="patchNodeData(p.id,$event)" />
       </template>
@@ -65,7 +64,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { VueFlow, addEdge, useVueFlow } from '@vue-flow/core'
+import { VueFlow, addEdge } from '@vue-flow/core'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import '@vue-flow/core/dist/style.css'
@@ -78,193 +77,258 @@ import FilterNode from './FilterNode.vue'
 import CommandNode from './CommandNode.vue'
 
 import TplIfNode from '../template/nodes/TplIfNode.vue'
-import TplRangeNode from '../template/nodes/TplRangeNode.vue'
 import TplFilterChainNode from '../template/nodes/TplFilterChainNode.vue'
-import TplFilterNode from '../template/nodes/TplFilterNode.vue'
 import TplParamsNode from '../template/nodes/TplParamsNode.vue'
 import TplSnippetNode from '../template/nodes/TplSnippetNode.vue'
 import TplOutputNode from '../template/nodes/TplOutputNode.vue'
 import TplVarNode from '../template/nodes/TplVarNode.vue'
 
-/* classic stream helpers (v/a/g) */
-function typeFromHandleId(id = ''){ const m = String(id).match(/(?:^|[_-])([vag])(?:\d+)?$/i); return m ? m[1].toLowerCase() : null }
-function sameChannel(h1,h2){ const t1=typeFromHandleId(h1), t2=typeFromHandleId(h2); return !!t1 && !!t2 && t1===t2 }
-function targetIndexFromHandle(id = ''){ const m = String(id).match(/(?:^|_)([vag])(\d+)$/i); return m ? Number(m[2]) : 0 }
+import { categorizeOption } from 'src/utils/categorize'
+import { getRawFlags } from 'src/utils/flags'
 
-/* template handle rules */
-const TPL_SRC = /^(then$|elif-\d+$|out_elif_\d+$|else$|out$)/i
+/* ---------------- helpers for classic edges (v/a/g) ---------------- */
+function typeFromHandleId(id = '') {
+  const m = String(id).match(/(?:^|[_-])([vag])(?:\d+)?$/i)
+  return m ? m[1].toLowerCase() : null
+}
+function sameChannel(h1, h2) {
+  const t1 = typeFromHandleId(h1)
+  const t2 = typeFromHandleId(h2)
+  return !!t1 && !!t2 && t1 === t2
+}
+function targetIndexFromHandle(id = '') {
+  const m = String(id).match(/(?:^|_)([vag])(\d+)$/i)
+  return m ? Number(m[2]) : 0
+}
+
+/* ---------------- helpers for template edges ---------------- */
+const TPL_SRC = /^(then$|out_elif_\d+$|out$|else$)/i
 const TPL_TGT = /^(body|in)$/i
-function isTplHandle(id=''){ return TPL_SRC.test(id) || TPL_TGT.test(id) }
+function isTplHandle(id = '') {
+  return TPL_SRC.test(id) || TPL_TGT.test(id)
+}
 
-/* vue-flow helpers we actually use */
-const { project, getNodes } = useVueFlow()
+/* ---------------- IO derivation for filters ---------------- */
+function parseFilterIO(io = '', cat = 'video-filter') {
+  // examples: "A×2→A", "AA→A", "A→A", "V×3→V", "A→N"
+  const type = cat === 'audio-filter' ? 'a' : 'v'
+  let ins = 1, outs = 1
+  const s = String(io).toUpperCase().replace(/\s+/g, '')
+  const m = s.match(/^([AVN×\d]+)->?([AVN×\d]+)$/) || s.match(/^([AVN×\d]+)→([AVN×\d]+)$/)
+  if (m) {
+    const L = m[1], R = m[2]
+    // inputs
+    const multL = L.match(/×(\d+)/); if (multL) ins = Number(multL[1])
+    else if (/^A+$/i.test(L) || /^V+$/i.test(L)) ins = L.length
+    else if (/^N$/i.test(L)) ins = 2
+    // outputs
+    const multR = R.match(/×(\d+)/); if (multR) outs = Number(multR[1])
+    else if (/^A+$/i.test(R) || /^V+$/i.test(R)) outs = R.length
+    else if (/^N$/i.test(R)) outs = 2
+  }
+  return { inputs: Array.from({ length: ins }, () => type), outputs: outs, type }
+}
 
-/* graph state */
+/* ---------------- graph state ---------------- */
 const nodes = ref([
-  { id: 'input-0',  type:'input-custom',  position:{ x:20,  y:160 }, data:{ label:'Input',  path:'./input.mp4',  index:0 } },
-  { id: 'output-0', type:'output-custom', position:{ x:980, y:220 }, data:{ label:'Output', path:'./output.mp4', mapLabel:'' } },
+  {
+    id: 'input-0',
+    type: 'input-custom',
+    position: { x: 20, y: 160 },
+    data: { label: 'Input', path: './input.mp4', index: 0 },
+  },
+  {
+    id: 'output-0',
+    type: 'output-custom',
+    position: { x: 980, y: 220 },
+    data: { label: 'Output', path: './output.mp4', mapLabel: '' },
+  },
 ])
 const edges = ref([])
 
-/* connect + validate */
-function validateConnection(c){
+/* ---------------- validate + connect ---------------- */
+function validateConnection(c) {
+  // template branch: allow tpl-src -> tpl-target
   if (isTplHandle(c.sourceHandle) || isTplHandle(c.targetHandle)) {
-    return TPL_SRC.test(c.sourceHandle||'') && TPL_TGT.test(c.targetHandle||'')
+    return TPL_SRC.test(c.sourceHandle || '') && TPL_TGT.test(c.targetHandle || '')
   }
+  // classic streams
   if (!c?.sourceHandle || !c?.targetHandle) return false
   return sameChannel(c.sourceHandle, c.targetHandle)
 }
-function onConnect(c){
+function onConnect(c) {
   if (isTplHandle(c.sourceHandle) || isTplHandle(c.targetHandle)) {
-    edges.value = addEdge({ ...c, data:{ kind:'tpl' } }, edges.value); return
+    edges.value = addEdge({ ...c, data: { kind: 'tpl' } }, edges.value)
+    return
   }
   if (!sameChannel(c.sourceHandle, c.targetHandle)) return
-  const ch = typeFromHandleId(c.sourceHandle||'')
-  const tIndex = targetIndexFromHandle(c.targetHandle||'')
-  edges.value = addEdge({ ...c, data:{ type: ch, tIndex } }, edges.value)
+  const ch = typeFromHandleId(c.sourceHandle || '')
+  const tIndex = targetIndexFromHandle(c.targetHandle || '')
+  edges.value = addEdge({ ...c, data: { type: ch, tIndex } }, edges.value)
 }
 
-/* edge utils */
-function removeEdgeById(id){ edges.value = edges.value.filter(e => e.id !== id) }
-function onEdgeClick(evt){ const { edge, event } = evt||{}; if (!edge||!event) return; if (event.altKey||event.ctrlKey||event.metaKey) removeEdgeById(edge.id) }
-function onEdgeContextMenu(evt){ if (!evt?.edge) return; evt?.event?.preventDefault?.(); removeEdgeById(evt.edge.id) }
-
-/* node utils */
-function patchNodeData(id, patch){
-  nodes.value = nodes.value.map(n => n.id===id ? { ...n, data: { ...(n.data||{}), ...(patch||{}) } } : n)
+/* ---------------- edge remove helpers ---------------- */
+function removeEdgeById(id) { edges.value = edges.value.filter(e => e.id !== id) }
+function onEdgeClick(evt) {
+  const { edge, event } = evt || {}
+  if (!edge || !event) return
+  if (event.altKey || event.ctrlKey || event.metaKey) removeEdgeById(edge.id)
 }
-function removeNode(id){
+function onEdgeContextMenu(evt) {
+  if (!evt?.edge) return
+  evt?.event?.preventDefault?.()
+  removeEdgeById(evt.edge.id)
+}
+
+/* ---------------- node utils ---------------- */
+function patchNodeData(id, patch) {
+  nodes.value = nodes.value.map(n =>
+    n.id === id ? { ...n, data: { ...(n.data || {}), ...(patch || {}) } } : n
+  )
+}
+function removeNode(id) {
   nodes.value = nodes.value.filter(n => n.id !== id)
   edges.value = edges.value.filter(e => e.source !== id && e.target !== id)
 }
-
-/* ids/coords helpers */
-function uid(p){ return `${p}-${Math.random().toString(36).slice(2,8)}` }
-function onDragOver(e){ e.dataTransfer.dropEffect = 'copy' }
-function flowPointFromEvent(e){
-  const pane = e.currentTarget?.querySelector?.('.vue-flow__pane') || e.currentTarget
-  const b = pane.getBoundingClientRect()
-  const pt = { x: e.clientX - b.left, y: e.clientY - b.top }
-  return typeof project === 'function' ? project(pt) : pt
+function nextInputIndex() {
+  const idxs = nodes.value.filter(n => n.type === 'input-custom').map(n => Number(n.data?.index ?? 0))
+  return idxs.length ? Math.max(...idxs) + 1 : 0
 }
-
-/* Chain unter Cursor erkennen */
-function chainAtPoint(p){
-  const all = getNodes().filter(n => n.type === 'tpl-filterchain')
-  return all.find(n => {
-    const w = n.dimensions?.width ?? 0, h = n.dimensions?.height ?? 0
-    return p.x>=n.position.x && p.x<=n.position.x+w && p.y>=n.position.y && p.y<=n.position.y+h
-  })
-}
-
-/* Payload robust lesen (application/json ODER text/plain) */
-function readPayload(e){
-  const types = Array.from(e.dataTransfer?.types || [])
-  let raw = ''
-  if (types.includes('application/json')) raw = e.dataTransfer.getData('application/json')
-  if (!raw && types.includes('text/plain')) raw = e.dataTransfer.getData('text/plain')
-  if (!raw) return null
-  try { return JSON.parse(raw) } catch { return null }
-}
-
-/* -------- Template-Filter (für Chains) -------- */
-function linkTpl(aId,aHandle,bId,bHandle){
-  edges.value = addEdge({ source:aId, sourceHandle:aHandle, target:bId, targetHandle:bHandle, data:{kind:'tpl'} }, edges.value)
-}
-function spawnTplFilter(name, pos, lane=null, order=0){
-  const id = uid('tplf')
-  nodes.value.push({ id, type:'tpl-filter', position: pos, data:{ name, argstr:'', laneId: lane?.id || null, order } })
-  return id
-}
-function laneFilters(chainId){
-  return nodes.value
-    .filter(n => n.type==='tpl-filter' && n.data?.laneId===chainId)
-    .sort((a,b)=> (a.data?.order??0) - (b.data?.order??0))
-}
-function addFiltersToChain(names, chain){
-  const w = chain.dimensions?.width ?? 260
-  const startX = chain.position.x + w + 24
-  const startY = chain.position.y + 20
-  const existing = laneFilters(chain.id)
-  const baseOrder = existing.length ? Math.max(...existing.map(n=>n.data?.order??0)) + 1 : 1
-  const ids = names.map((nm,i)=> spawnTplFilter(nm, { x:startX, y:startY + i*72 }, chain, baseOrder+i))
-  if (!existing.length && ids.length) linkTpl(chain.id, 'out', ids[0], 'in')
-  if (existing.length && ids.length)  linkTpl(existing[existing.length-1].id, 'out', ids[0], 'in')
-  for (let i=0;i<ids.length-1;i++) linkTpl(ids[i],'out',ids[i+1],'in')
-}
-
-/* -------- Klassische Filter (für Workflows ohne Template) -------- */
-function spawnClassicFilter(name, pos, meta = {}){
-  const id = uid('f')
+function addInput(y = 100) {
+  const i = nextInputIndex()
   nodes.value.push({
-    id, type:'filter', position: pos,
-    data: {
-      label: name,
-      option: name,
-      description: meta?.description || '',
-      cat: meta?.cat || meta?.category || 'video-filter',
-      filter_io: meta?.filter_io || '',
-      args: ''
-    }
+    id: `input-${Date.now()}`,
+    type: 'input-custom',
+    position: { x: 20, y },
+    data: { label: 'Input', path: './input.mp4', index: i },
   })
-  return id
-}
-function addClassicFilters(names, p, metaSource){
-  const meta = Array.isArray(metaSource?.options) ? metaSource.options[0] : metaSource
-  names.forEach((nm,i)=> spawnClassicFilter(nm, { x:p.x, y:p.y + i*84 }, meta))
 }
 
-/* Payload → Filternamen extrahieren (option ODER name) */
-function namesFromPayload(p){
-  const names=[]
-  const push = (v)=> { if (typeof v==='string' && v) names.push(v.replace(/^-+/,'')) }
+/* ---------------- drop routing ---------------- */
+function onDrop(e) {
+  const raw = e.dataTransfer.getData('application/json')
+  if (!raw) return
+  const payload = JSON.parse(raw)
+  const pos = { x: e.offsetX, y: e.offsetY }
 
-  if (p?.type==='filter-group' && Array.isArray(p.options)) {
-    p.options.forEach(o=> push(o?.option || o?.name))
-    return names
-  }
-  if (p && (typeof p.option==='string' || typeof p.name==='string')) {
-    push(p.option || p.name)
-    return names
-  }
-  if (p?.kind==='group' && Array.isArray(p.items)) {
-    p.items.forEach(it=> push(it?.option || it?.name))
-    return names
-  }
-  if (p?.kind==='option') {
-    push(p.option || p.name)
-    return names
-  }
-  return names
-}
+  // 0) quick actions
+  if (payload.type === 'input') { addInput(pos.y); return }
 
-/* drop routing (Pane-weit) */
-function onDrop(e){
-  const payload = readPayload(e); if (!payload) return
-  const p = flowPointFromEvent(e)
-
-  // template blocks
-  if (payload.kind === 'tpl-if')     { nodes.value.push({ id:uid('tplif'), type:'tpl-if',        position:p, data:{ clauses:[{ left:'$width', op:'lt', right:'1080' }], hasElse:true } }); return }
-  if (payload.kind === 'tpl-range')  { nodes.value.push({ id:uid('tplrng'), type:'tpl-range',     position:p, data:{ expr:'until (int (.GetNumberOfAudioChannels))' } }); return }
-  if (payload.kind === 'tpl-filterchain'){ nodes.value.push({ id:uid('tplfc'), type:'tpl-filterchain', position:p, data:{} }); return }
-  if (payload.kind === 'tpl-output') { nodes.value.push({ id:uid('tplout'), type:'tpl-output',   position:p, data:{} }); return }
-  if (payload.kind === 'tpl-var')    { nodes.value.push({ id:uid('tplvar'), type:'tpl-var',       position:p, data:{ name:'$width', expr:'.GetMIValue "video" "Width" 0' } }); return }
-  if (payload.kind === 'tpl-snippet'){ nodes.value.push({ id:uid('tplsn'), type:'tpl-snippet',    position:p, data:{ body: payload.body || '' } }); return }
-
-  // sprig → snippet
-  if (payload.type === 'sprig-fn' || payload.type === 'sprig-preset') {
-    nodes.value.push({ id:uid('tplsn'), type:'tpl-snippet', position:p, data:{ body: payload.template || '' } })
+  // 1) TEMPLATE blocks (note: CommandPalette sends "kind")
+  if (payload.kind === 'tpl-if') {
+    nodes.value.push({
+      id: `tplif-${Date.now()}`,
+      type: 'tpl-if',
+      position: pos,
+      data: { clauses: [{ left: '$x', op: 'eq', right: '1' }], hasElse: true }
+    })
+    return
+  }
+  if (payload.kind === 'tpl-filterchain') {
+    nodes.value.push({
+      id: `tpfc-${Date.now()}`,
+      type: 'tpl-filterchain',
+      position: pos,
+      data: { chain: [] } // items: {name, params:{k:v}}
+    })
+    return
+  }
+  if (payload.kind === 'tpl-params') {
+    nodes.value.push({
+      id: `tpp-${Date.now()}`,
+      type: 'tpl-params',
+      position: pos,
+      data: { items: [] } // [['-c:v','libx264']]
+    })
+    return
+  }
+  if (payload.kind === 'tpl-snippet') {
+    nodes.value.push({
+      id: `tps-${Date.now()}`,
+      type: 'tpl-snippet',
+      position: pos,
+      data: { body: String(payload.template || '// (leer)') }
+    })
+    return
+  }
+  if (payload.kind === 'tpl-output') {
+    nodes.value.push({
+      id: `tpo-${Date.now()}`,
+      type: 'tpl-output',
+      position: pos,
+      data: { target: 'cli' } // 'vf' | 'af' | 'cli'
+    })
+    return
+  }
+  if (payload.kind === 'tpl-var') {
+    nodes.value.push({
+      id: `tpv-${Date.now()}`,
+      type: 'tpl-var',
+      position: pos,
+      data: { name: '$x', expr: '.GetMIValue "video" "Width" 0' }
+    })
     return
   }
 
-  // ffmpeg/bmx → klassisch oder templated
-  const names = namesFromPayload(payload)
-  if (!names.length) return
+  // 2) filter group
+  if (payload.type === 'filter-group') {
+    const isGlobal = /global options/i.test(payload.group) || payload.cat === 'global'
+    const sample = payload.options?.[0] || {}
+    const flags = getRawFlags(payload) || getRawFlags(sample) || ''
+    const cat = isGlobal ? 'global' : (payload.cat || 'video-filter')
+    let inputs = isGlobal ? ['g'] : [(cat === 'audio-filter') ? 'a' : 'v']
+    let outputs = 1
+    if (sample.filter_io && !isGlobal) {
+      const d = parseFilterIO(sample.filter_io, cat)
+      inputs = d.inputs; outputs = d.outputs
+    }
 
-  const chain = chainAtPoint(p)
-  if (chain) addFiltersToChain(names, chain)   // templated
-  else addClassicFilters(names, p, payload)    // klassisch
+    nodes.value.push({
+      id: `f-${Date.now()}`,
+      type: isGlobal ? 'global' : 'filter',
+      position: pos,
+      data: {
+        cat,
+        group: payload.group,
+        options: payload.options || [],
+        inputs, outputs,
+        filterDesc: sample.filter_description || sample.description || '',
+        filter_flags_code: flags,
+      },
+    })
+    return
+  }
+
+  // 3) single option
+  const cat = categorizeOption(payload).cat // 'global'|'other'|'audio-filter'|'video-filter'
+  const flags = getRawFlags(payload)
+  let inputs = (cat === 'audio-filter') ? ['a'] : (cat === 'global' || cat === 'other') ? ['g'] : ['v']
+  let outputs = 1
+  if (payload.filter_io && (cat === 'audio-filter' || cat === 'video-filter')) {
+    const d = parseFilterIO(payload.filter_io, cat)
+    inputs = d.inputs; outputs = d.outputs
+  }
+
+  nodes.value.push({
+    id: `n-${Date.now()}`,
+    type: (cat === 'global' || cat === 'other') ? cat : 'filter',
+    position: pos,
+    data: {
+      ...payload,
+      cat,
+      value: '',
+      inputs, outputs,
+      filter_flags_code: flags,
+      filterDesc: payload.filter_description || payload.description || '',
+    },
+  })
 }
+
+/* ---------------- expose ---------------- */
+defineExpose({
+  getState: () => ({ nodes: nodes.value, edges: edges.value }),
+  addInput,
+})
 </script>
 
 <style scoped>
@@ -283,7 +347,7 @@ function onDrop(e){
 /* g (green) */
 :deep(.vue-flow__handle[id^="g"])::after, :deep(.vue-flow__handle[id*="_g"])::after{ content:'g'; color:#2e7d32; background:#e8f5e9; }
 
-/* colours for node cards (optional) */
+/* colours for node cards (like before) */
 :deep(.cat-video-filter){ background:#fffbea; }
 :deep(.cat-audio-filter){ background:#f5f0ff; }
 :deep(.cat-global){ background:#f8fafc; }
