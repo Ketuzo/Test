@@ -1,0 +1,16 @@
+.ffmpeg-node {
+  padding: 8px;
+  border: 1px solid #888;
+  border-radius: 4px;
+  min-width: 160px;
+  background: #fff;
+  font-family: monospace;
+}
+.ffmpeg-node .title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.vue-flow__node-video-filter  { background:#fffbe6; }
+.vue-flow__node-audio-filter  { background:#f2e8ff; }
+.vue-flow__node-global        { background:#e9f5ff; }
+.vue-flow__node-misc          { background:#f5f5f5; }

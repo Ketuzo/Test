@@ -1,0 +1,54 @@
+/* === Vue-Flow Handle-Style global =================================== */
+:root{
+  --vf-handle-bg: #555;
+  --vf-badge-pad: 0 6px;
+  --vf-badge-radius: 10px;
+  --vf-badge-font: 10px;
+}
+
+.vue-flow__handle{
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--vf-handle-bg);
+}
+
+.vue-flow__handle::after{
+  position: absolute;
+  top: -4px;
+  left: 12px;
+  padding: var(--vf-badge-pad);
+  font-size: var(--vf-badge-font);
+  line-height: 14px;
+  border-radius: var(--vf-badge-radius);
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+  content: ''; /* default leer, unten je Typ überschrieben */
+}
+
+/* v-Handles (blau) */
+.vue-flow__handle[id^="v"]::after,
+.vue-flow__handle[id*="_v"]::after{
+  content: 'v';
+  color: #1e88e5;
+  background: #e8f0ff;
+}
+
+/* a-Handles (violett) */
+.vue-flow__handle[id^="a"]::after,
+.vue-flow__handle[id*="_a"]::after{
+  content: 'a';
+  color: #6a1b9a;
+  background: #f5e8ff;
+}
+
+/* g-Handles (grün) */
+.vue-flow__handle[id^="g"]::after,
+.vue-flow__handle[id*="_g"]::after{
+  content: 'g';
+  color: #2e7d32;
+  background: #e8f5e9;
+}
